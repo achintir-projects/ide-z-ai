@@ -138,6 +138,14 @@ export default function Home() {
       ))
     }
     
+    // Generate mock download URL
+    const mockDownloadUrl = `data:application/octet-stream;base64,${btoa(JSON.stringify({
+      appName: generatedApp.name,
+      platform: targetPlatform,
+      buildDate: new Date().toISOString(),
+      message: "This is a mock build file. In a real implementation, this would be the actual compiled application."
+    }, null, 2))}`
+    
     // Complete build
     setBuildStatuses(prev => prev.map(status => 
       status.platform === targetPlatform 
@@ -145,14 +153,14 @@ export default function Home() {
             ...status, 
             status: 'completed', 
             progress: 100,
-            downloadUrl: `https://example.com/download/${generatedApp.name}-${targetPlatform}.${targetPlatform === 'web' ? 'zip' : targetPlatform === 'android' ? 'apk' : 'ipa'}`
+            downloadUrl: mockDownloadUrl
           }
         : status
     ))
     
     toast({
       title: "Build Completed!",
-      description: `${targetPlatform} build is ready for download.`
+      description: `${targetPlatform} build is ready for download. Note: This is a demonstration build.`
     })
   }
 
@@ -494,11 +502,29 @@ export default function Home() {
                               <Button 
                                 size="sm" 
                                 className="w-full"
-                                onClick={() => status.downloadUrl && window.open(status.downloadUrl, '_blank')}
+                                onClick={() => {
+                                  if (status.downloadUrl) {
+                                    // Create a download from the mock data URL
+                                    const link = document.createElement('a')
+                                    link.href = status.downloadUrl
+                                    link.download = `${generatedApp.name}-${status.platform}.${status.platform === 'web' ? 'json' : status.platform === 'android' ? 'apk' : 'ipa'}`
+                                    document.body.appendChild(link)
+                                    link.click()
+                                    document.body.removeChild(link)
+                                    
+                                    toast({
+                                      title: "Download Started",
+                                      description: `Downloading ${status.platform} build file...`
+                                    })
+                                  }
+                                }}
                               >
                                 <Download className="mr-2 h-4 w-4" />
-                                Download {platform === 'web' ? 'Web App' : platform === 'android' ? 'APK' : 'IPA'}
+                                Download {status.platform === 'web' ? 'Build Info' : status.platform === 'android' ? 'APK' : 'IPA'}
                               </Button>
+                              <div className="text-xs text-gray-500 text-center">
+                                Mock build file for demonstration
+                              </div>
                             </div>
                           )}
                           
