@@ -138,13 +138,22 @@ export default function Home() {
       ))
     }
     
-    // Generate mock download URL
-    const mockDownloadUrl = `data:application/octet-stream;base64,${btoa(JSON.stringify({
+    // Generate mock download URL with educational content
+    const buildInfo = {
       appName: generatedApp.name,
       platform: targetPlatform,
       buildDate: new Date().toISOString(),
-      message: "This is a mock build file. In a real implementation, this would be the actual compiled application."
-    }, null, 2))}`
+      message: "This is a demonstration build file.",
+      explanation: "In a real implementation, this would be an actual compiled application file.",
+      whatYouWouldGet: targetPlatform === 'android' ? 
+        "A real APK file would contain compiled Android application code, resources, and metadata ready for installation on Android devices." :
+        targetPlatform === 'ios' ?
+        "A real IPA file would contain compiled iOS application code and resources ready for installation on iOS devices." :
+        "A real web build would contain compiled static files ready for deployment to web servers.",
+      nextSteps: "To create real builds, you would need to set up proper build environments with Android Studio, Xcode, or web build tools."
+    }
+    
+    const mockDownloadUrl = `data:application/json;base64,${btoa(JSON.stringify(buildInfo, null, 2))}`
     
     // Complete build
     setBuildStatuses(prev => prev.map(status => 
@@ -160,7 +169,7 @@ export default function Home() {
     
     toast({
       title: "Build Completed!",
-      description: `${targetPlatform} build is ready for download. Note: This is a demonstration build.`
+      description: `${targetPlatform} build info is ready for download. Note: This contains build information, not the actual app file.`
     })
   }
 
@@ -460,10 +469,18 @@ export default function Home() {
                   Build Status
                 </CardTitle>
                 <CardDescription>
-                  Monitor build progress and download your applications.
+                  Monitor build progress and download build information.
                 </CardDescription>
               </CardHeader>
               <CardContent>
+                <div className="mb-4 p-3 bg-blue-50 rounded-lg">
+                  <h4 className="font-medium text-blue-900 mb-2">📱 About This Demo</h4>
+                  <p className="text-sm text-blue-800">
+                    This is a demonstration of the Heavy Lifter v3 system. The downloads contain build information, 
+                    not actual installable app files. Real APK/IPA files require proper build environments 
+                    with Android Studio, Xcode, or cloud build services like EAS Build.
+                  </p>
+                </div>
                 <div className="grid md:grid-cols-3 gap-4">
                   {generatedApp.platforms.map((platform) => {
                     const status = buildStatuses.find(s => s.platform === platform)
@@ -507,23 +524,23 @@ export default function Home() {
                                     // Create a download from the mock data URL
                                     const link = document.createElement('a')
                                     link.href = status.downloadUrl
-                                    link.download = `${generatedApp.name}-${status.platform}.${status.platform === 'web' ? 'json' : status.platform === 'android' ? 'apk' : 'ipa'}`
+                                    link.download = `${generatedApp.name}-${status.platform}-build-info.json`
                                     document.body.appendChild(link)
                                     link.click()
                                     document.body.removeChild(link)
                                     
                                     toast({
                                       title: "Download Started",
-                                      description: `Downloading ${status.platform} build file...`
+                                      description: `Downloading ${status.platform} build information file...`
                                     })
                                   }
                                 }}
                               >
                                 <Download className="mr-2 h-4 w-4" />
-                                Download {status.platform === 'web' ? 'Build Info' : status.platform === 'android' ? 'APK' : 'IPA'}
+                                Download Build Info
                               </Button>
                               <div className="text-xs text-gray-500 text-center">
-                                Mock build file for demonstration
+                                Contains build information, not the actual app file
                               </div>
                             </div>
                           )}
