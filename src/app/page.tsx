@@ -6,29 +6,44 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Copy, Download, Sparkles, Code, Smartphone, Monitor } from 'lucide-react'
+import { Copy, Download, Sparkles, Code, Smartphone, Monitor, Eye, Settings, Play, Loader2 } from 'lucide-react'
 import { toast } from '@/hooks/use-toast'
 
 interface GeneratedApp {
   name: string
-  platform: string
-  packageJson: string
-  appCode: string
+  platforms: string[]
+  buildCommand: string
+  generatedFiles: Array<{
+    filename: string
+    content: string
+    path: string
+  }>
   instructions: string
   assumptions: string[]
 }
 
+interface BuildStatus {
+  platform: string
+  status: 'pending' | 'building' | 'completed' | 'failed'
+  downloadUrl?: string
+  progress: number
+}
+
 export default function Home() {
   const [idea, setIdea] = useState('')
-  const [platform, setPlatform] = useState<'web' | 'android' | 'ios' | null>(null)
+  const [platform, setPlatform] = useState<{ web: boolean; android: boolean; ios: boolean }>({ web: false, android: false, ios: false })
+  const [buildSystem, setBuildSystem] = useState<'eas' | 'capacitor'>('eas')
   const [isGenerating, setIsGenerating] = useState(false)
   const [generatedApp, setGeneratedApp] = useState<GeneratedApp | null>(null)
+  const [previewMode, setPreviewMode] = useState(false)
+  const [buildStatuses, setBuildStatuses] = useState<BuildStatus[]>([])
+  const [selectedFile, setSelectedFile] = useState<string>('App.js')
 
   const handleGenerate = async () => {
-    if (!idea.trim() || !platform) {
+    if (!idea.trim() || !Object.values(platform).some(v => v)) {
       toast({
         title: "Missing Information",
-        description: "Please provide your app idea and select a platform.",
+        description: "Please provide your app idea and select at least one platform.",
         variant: "destructive"
       })
       return
@@ -38,14 +53,22 @@ export default function Home() {
     
     try {
       // Simulate API call to generate app
-      await new Promise(resolve => setTimeout(resolve, 2000))
+      await new Promise(resolve => setTimeout(resolve, 3000))
       
-      const app = generateAppFromIdea(idea, platform)
+      const app = generateAppFromIdea(idea, platform, buildSystem)
       setGeneratedApp(app)
+      
+      // Initialize build statuses
+      const initialStatuses: BuildStatus[] = app.platforms.map(p => ({
+        platform: p,
+        status: 'pending' as const,
+        progress: 0
+      }))
+      setBuildStatuses(initialStatuses)
       
       toast({
         title: "App Generated Successfully!",
-        description: `Your ${app.name} for ${platform.toUpperCase()} is ready.`
+        description: `Your ${app.name} is ready for preview and build.`
       })
     } catch (error) {
       toast({
@@ -66,170 +89,453 @@ export default function Home() {
     })
   }
 
-  const downloadApp = () => {
+  const downloadProject = () => {
     if (!generatedApp) return
     
-    const blob = new Blob([
-      `// package.json\n${generatedApp.packageJson}\n\n`,
-      `// App.js\n${generatedApp.appCode}`
-    ], { type: 'text/javascript' })
+    // Create a zip-like structure in memory
+    const files = generatedApp.generatedFiles.map(file => ({
+      path: file.path + file.filename,
+      content: file.content
+    }))
     
+    // For simplicity, download as a single JSON file containing all files
+    const blob = new Blob([JSON.stringify({ files }, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${generatedApp.name.toLowerCase().replace(/\s+/g, '-')}-app.js`
+    a.download = `${generatedApp.name.toLowerCase().replace(/\s+/g, '-')}-project.json`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
   }
 
+  const startBuild = async (targetPlatform: string) => {
+    if (!generatedApp) return
+    
+    // Update build status
+    setBuildStatuses(prev => prev.map(status => 
+      status.platform === targetPlatform 
+        ? { ...status, status: 'building', progress: 0 }
+        : status
+    ))
+    
+    // Simulate build process
+    const buildSteps = [
+      { progress: 20, message: "Installing dependencies..." },
+      { progress: 40, message: "Configuring build..." },
+      { progress: 60, message: "Compiling code..." },
+      { progress: 80, message: "Packaging application..." },
+      { progress: 100, message: "Build completed!" }
+    ]
+    
+    for (const step of buildSteps) {
+      await new Promise(resolve => setTimeout(resolve, 1000))
+      setBuildStatuses(prev => prev.map(status => 
+        status.platform === targetPlatform 
+          ? { ...status, progress: step.progress }
+          : status
+      ))
+    }
+    
+    // Complete build
+    setBuildStatuses(prev => prev.map(status => 
+      status.platform === targetPlatform 
+        ? { 
+            ...status, 
+            status: 'completed', 
+            progress: 100,
+            downloadUrl: `https://example.com/download/${generatedApp.name}-${targetPlatform}.${targetPlatform === 'web' ? 'zip' : targetPlatform === 'android' ? 'apk' : 'ipa'}`
+          }
+        : status
+    ))
+    
+    toast({
+      title: "Build Completed!",
+      description: `${targetPlatform} build is ready for download.`
+    })
+  }
+
+  const startAllBuilds = async () => {
+    if (!generatedApp) return
+    
+    const platforms = generatedApp.platforms
+    for (const platform of platforms) {
+      await startBuild(platform)
+      // Small delay between builds
+      await new Promise(resolve => setTimeout(resolve, 500))
+    }
+  }
+
+  const getPlatformIcon = (platform: string) => {
+    switch (platform) {
+      case 'web': return Monitor
+      case 'android': return Smartphone
+      case 'ios': return Smartphone
+      default: return Code
+    }
+  }
+
+  const getBuildStatusColor = (status: string) => {
+    switch (status) {
+      case 'pending': return 'bg-gray-500'
+      case 'building': return 'bg-blue-500'
+      case 'completed': return 'bg-green-500'
+      case 'failed': return 'bg-red-500'
+      default: return 'bg-gray-500'
+    }
+  }
+
+  const selectedPlatforms = Object.entries(platform)
+    .filter(([_, selected]) => selected)
+    .map(([name, _]) => name)
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800">
-      <div className="container mx-auto px-4 py-8 max-w-6xl">
+      <div className="container mx-auto px-4 py-8 max-w-7xl">
         {/* Hero Section */}
         <div className="text-center mb-12">
           <div className="flex items-center justify-center mb-4">
             <Sparkles className="h-12 w-12 text-primary mr-3" />
             <h1 className="text-4xl md:text-6xl font-bold bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
-              Heavy Lifter
+              Heavy Lifter v3
             </h1>
           </div>
-          <p className="text-xl text-muted-foreground mb-8 max-w-2xl mx-auto">
-            Project Genesis v2 - Transform your ideas into working applications instantly. 
-            Zero configuration, maximum magic.
+          <p className="text-xl text-muted-foreground mb-8 max-w-3xl mx-auto">
+            Project Genesis v3 - Transform your ideas into cloud-ready applications with 
+            multi-platform support, preview functionality, and automatic builds.
           </p>
         </div>
 
         {/* Main Interface */}
-        <div className="grid lg:grid-cols-2 gap-8 mb-12">
-          {/* Input Section */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Sparkles className="h-5 w-5" />
-                Your App Idea
-              </CardTitle>
-              <CardDescription>
-                Describe your app idea in plain English. I'll handle the rest.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <Textarea
-                placeholder="e.g., A todo app that syncs across devices, A recipe manager with shopping lists, A fitness tracker for workouts..."
-                value={idea}
-                onChange={(e) => setIdea(e.target.value)}
-                className="min-h-[120px] resize-none"
-              />
-              
-              <div>
-                <label className="text-sm font-medium mb-3 block">Choose Platform</label>
-                <div className="grid grid-cols-3 gap-3">
+        {!generatedApp ? (
+          <div className="grid lg:grid-cols-2 gap-8 mb-12">
+            {/* Input Section */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Sparkles className="h-5 w-5" />
+                  Your App Idea
+                </CardTitle>
+                <CardDescription>
+                  Describe your app idea in plain English. I'll handle the rest.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <Textarea
+                  placeholder="e.g., A todo app that syncs across devices, A recipe manager with shopping lists, A fitness tracker for workouts..."
+                  value={idea}
+                  onChange={(e) => setIdea(e.target.value)}
+                  className="min-h-[120px] resize-none"
+                />
+                
+                <div>
+                  <label className="text-sm font-medium mb-3 block">Select Platforms</label>
+                  <div className="grid grid-cols-3 gap-3">
+                    {[
+                      { id: 'web', icon: Monitor, label: 'Web', desc: 'Next.js' },
+                      { id: 'android', icon: Smartphone, label: 'Android', desc: 'React Native' },
+                      { id: 'ios', icon: Smartphone, label: 'iOS', desc: 'React Native' }
+                    ].map((p) => (
+                      <button
+                        key={p.id}
+                        onClick={() => setPlatform(prev => ({ ...prev, [p.id]: !prev[p.id as keyof typeof prev] }))}
+                        className={`p-4 border-2 rounded-lg text-center transition-all hover:shadow-md ${
+                          platform[p.id as keyof typeof platform]
+                            ? 'border-primary bg-primary/5'
+                            : 'border-border hover:border-primary/50'
+                        }`}
+                      >
+                        <p.icon className="h-8 w-8 mx-auto mb-2 text-primary" />
+                        <div className="font-medium">{p.label}</div>
+                        <div className="text-xs text-muted-foreground">{p.desc}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-sm font-medium mb-3 block">Build System</label>
+                  <div className="grid grid-cols-2 gap-3">
+                    {[
+                      { id: 'eas', label: 'Expo EAS', desc: 'Cloud builds' },
+                      { id: 'capacitor', label: 'Capacitor', desc: 'Native builds' }
+                    ].map((b) => (
+                      <button
+                        key={b.id}
+                        onClick={() => setBuildSystem(b.id as 'eas' | 'capacitor')}
+                        className={`p-4 border-2 rounded-lg text-center transition-all hover:shadow-md ${
+                          buildSystem === b.id
+                            ? 'border-primary bg-primary/5'
+                            : 'border-border hover:border-primary/50'
+                        }`}
+                      >
+                        <div className="font-medium">{b.label}</div>
+                        <div className="text-xs text-muted-foreground">{b.desc}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                
+                <Button 
+                  onClick={handleGenerate} 
+                  disabled={!idea.trim() || !selectedPlatforms.length || isGenerating}
+                  className="w-full"
+                  size="lg"
+                >
+                  {isGenerating ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Generating Your App...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="mr-2 h-4 w-4" />
+                      Generate My App
+                    </>
+                  )}
+                </Button>
+              </CardContent>
+            </Card>
+
+            {/* Examples Section */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Example Ideas</CardTitle>
+                <CardDescription>
+                  Click on any example to get started quickly
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3">
                   {[
-                    { id: 'web', icon: Monitor, label: 'Web', desc: 'Next.js App' },
-                    { id: 'android', icon: Smartphone, label: 'Android', desc: 'React Native' },
-                    { id: 'ios', icon: Smartphone, label: 'iOS', desc: 'React Native' }
-                  ].map((p) => (
+                    "A simple todo list with categories and due dates",
+                    "A recipe manager with ingredient lists and cooking instructions",
+                    "A workout tracker for logging exercises and progress",
+                    "A habit tracker with streaks and daily reminders",
+                    "A note-taking app with tags and search functionality",
+                    "A budget tracker for income and expenses",
+                    "A water intake tracker with reminders",
+                    "A book club snack organizer"
+                  ].map((example, index) => (
                     <button
-                      key={p.id}
-                      onClick={() => setPlatform(p.id as any)}
-                      className={`p-4 border-2 rounded-lg text-center transition-all hover:shadow-md ${
-                        platform === p.id
-                          ? 'border-primary bg-primary/5'
-                          : 'border-border hover:border-primary/50'
-                      }`}
+                      key={index}
+                      onClick={() => setIdea(example)}
+                      className="w-full text-left p-3 rounded-lg border border-border hover:border-primary/50 hover:bg-primary/5 transition-colors"
                     >
-                      <p.icon className="h-8 w-8 mx-auto mb-2 text-primary" />
-                      <div className="font-medium">{p.label}</div>
-                      <div className="text-xs text-muted-foreground">{p.desc}</div>
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline" className="text-xs">
+                          Example {index + 1}
+                        </Badge>
+                        <span className="text-sm">{example}</span>
+                      </div>
                     </button>
                   ))}
                 </div>
-              </div>
-              
-              <Button 
-                onClick={handleGenerate} 
-                disabled={!idea.trim() || !platform || isGenerating}
-                className="w-full"
-                size="lg"
-              >
-                {isGenerating ? (
-                  <>
-                    <Sparkles className="mr-2 h-4 w-4 animate-spin" />
-                    Generating Your App...
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="mr-2 h-4 w-4" />
-                    Generate My App
-                  </>
-                )}
-              </Button>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+          </div>
+        ) : (
+          /* Generated App Interface */
+          <div className="space-y-8">
+            {/* App Header */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Code className="h-5 w-5" />
+                  {generatedApp.name}
+                </CardTitle>
+                <CardDescription>
+                  Generated for: {generatedApp.platforms.join(', ')} • Build System: {buildSystem.toUpperCase()}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex gap-4 flex-wrap">
+                  <Button onClick={() => setPreviewMode(!previewMode)} variant="outline">
+                    <Eye className="mr-2 h-4 w-4" />
+                    {previewMode ? 'Edit Code' : 'Preview App'}
+                  </Button>
+                  <Button onClick={downloadProject} variant="outline">
+                    <Download className="mr-2 h-4 w-4" />
+                    Download Project
+                  </Button>
+                  <Button onClick={startAllBuilds}>
+                    <Play className="mr-2 h-4 w-4" />
+                    Build All Platforms
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
 
-          {/* Examples Section */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Example Ideas</CardTitle>
-              <CardDescription>
-                Click on any example to get started quickly
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                {[
-                  "A simple todo list with categories and due dates",
-                  "A recipe manager with ingredient lists and cooking instructions",
-                  "A workout tracker for logging exercises and progress",
-                  "A habit tracker with streaks and daily reminders",
-                  "A note-taking app with tags and search functionality",
-                  "A budget tracker for income and expenses"
-                ].map((example, index) => (
-                  <button
-                    key={index}
-                    onClick={() => setIdea(example)}
-                    className="w-full text-left p-3 rounded-lg border border-border hover:border-primary/50 hover:bg-primary/5 transition-colors"
-                  >
-                    <div className="flex items-center gap-2">
-                      <Badge variant="outline" className="text-xs">
-                        Example {index + 1}
-                      </Badge>
-                      <span className="text-sm">{example}</span>
+            {/* Preview Mode */}
+            {previewMode ? (
+              <Card>
+                <CardHeader>
+                  <CardTitle>App Preview</CardTitle>
+                  <CardDescription>
+                    This is how your app will look and function. You can make changes below.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="bg-gray-100 p-4 rounded-lg min-h-[400px] flex items-center justify-center">
+                    <div className="text-center">
+                      <div className="text-6xl mb-4">📱</div>
+                      <h3 className="text-xl font-semibold mb-2">App Preview</h3>
+                      <p className="text-gray-600">
+                        Interactive preview of {generatedApp.name} would appear here.
+                        Users can test the app functionality and provide feedback.
+                      </p>
                     </div>
-                  </button>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : (
+              /* Code Editor Mode */
+              <Card>
+                <CardHeader>
+                  <CardTitle>Project Files</CardTitle>
+                  <CardDescription>
+                    Review and edit your generated code before building.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    {/* File Tabs */}
+                    <div className="flex gap-2 border-b">
+                      {generatedApp.generatedFiles.map((file) => (
+                        <button
+                          key={file.filename}
+                          onClick={() => setSelectedFile(file.filename)}
+                          className={`px-4 py-2 border-b-2 transition-colors ${
+                            selectedFile === file.filename
+                              ? 'border-primary text-primary'
+                              : 'border-transparent text-muted-foreground hover:text-foreground'
+                          }`}
+                        >
+                          {file.filename}
+                        </button>
+                      ))}
+                    </div>
 
-        {/* Results Section */}
-        {generatedApp && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Code className="h-5 w-5" />
-                Your App Is Ready!
-              </CardTitle>
-              <CardDescription>
-                {generatedApp.name} for {generatedApp.platform.toUpperCase()} - Complete and runnable
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-6">
-                {/* Instructions */}
+                    {/* Code Editor */}
+                    <div className="relative">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="absolute top-2 right-2 z-10"
+                        onClick={() => {
+                          const file = generatedApp.generatedFiles.find(f => f.filename === selectedFile)
+                          if (file) {
+                            copyToClipboard(file.content, file.filename)
+                          }
+                        }}
+                      >
+                        <Copy className="mr-2 h-4 w-4" />
+                        Copy
+                      </Button>
+                      <pre className="bg-slate-900 text-slate-100 p-4 rounded-lg overflow-x-auto text-sm max-h-96">
+                        <code>
+                          {generatedApp.generatedFiles.find(f => f.filename === selectedFile)?.content || ''}
+                        </code>
+                      </pre>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Build Status */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Settings className="h-5 w-5" />
+                  Build Status
+                </CardTitle>
+                <CardDescription>
+                  Monitor build progress and download your applications.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid md:grid-cols-3 gap-4">
+                  {generatedApp.platforms.map((platform) => {
+                    const status = buildStatuses.find(s => s.platform === platform)
+                    const IconComponent = getPlatformIcon(platform)
+                    
+                    return (
+                      <Card key={platform} className="relative">
+                        <CardContent className="p-4">
+                          <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center gap-2">
+                              <IconComponent className="h-5 w-5" />
+                              <span className="font-medium capitalize">{platform}</span>
+                            </div>
+                            <div className={`w-3 h-3 rounded-full ${getBuildStatusColor(status?.status || 'pending')}`} />
+                          </div>
+                          
+                          {status?.status === 'building' && (
+                            <div className="space-y-2">
+                              <div className="w-full bg-gray-200 rounded-full h-2">
+                                <div 
+                                  className="bg-blue-500 h-2 rounded-full transition-all duration-300"
+                                  style={{ width: `${status.progress}%` }}
+                                ></div>
+                              </div>
+                              <div className="text-xs text-gray-600">
+                                Building... {status.progress}%
+                              </div>
+                            </div>
+                          )}
+                          
+                          {status?.status === 'completed' && (
+                            <div className="space-y-2">
+                              <div className="text-sm text-green-600 font-medium">
+                                Build Completed
+                              </div>
+                              <Button 
+                                size="sm" 
+                                className="w-full"
+                                onClick={() => status.downloadUrl && window.open(status.downloadUrl, '_blank')}
+                              >
+                                <Download className="mr-2 h-4 w-4" />
+                                Download {platform === 'web' ? 'Web App' : platform === 'android' ? 'APK' : 'IPA'}
+                              </Button>
+                            </div>
+                          )}
+                          
+                          {status?.status === 'pending' && (
+                            <Button 
+                              size="sm" 
+                              className="w-full"
+                              onClick={() => startBuild(platform)}
+                            >
+                              <Play className="mr-2 h-4 w-4" />
+                              Build {platform}
+                            </Button>
+                          )}
+                        </CardContent>
+                      </Card>
+                    )
+                  })}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Instructions */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Build Instructions</CardTitle>
+              </CardHeader>
+              <CardContent>
                 <div className="bg-muted/50 p-4 rounded-lg">
-                  <h3 className="font-medium mb-2">How to Run Your App:</h3>
+                  <h3 className="font-medium mb-2">How to deploy your app:</h3>
                   <ol className="list-decimal list-inside space-y-1 text-sm text-muted-foreground">
                     {generatedApp.instructions.split('\n').map((line, index) => (
                       <li key={index}>{line}</li>
                     ))}
                   </ol>
                 </div>
-
-                {/* Assumptions */}
-                <div>
+                
+                <div className="mt-4">
                   <h3 className="font-medium mb-3">What I Included:</h3>
                   <div className="flex flex-wrap gap-2">
                     {generatedApp.assumptions.map((assumption, index) => (
@@ -239,107 +545,68 @@ export default function Home() {
                     ))}
                   </div>
                 </div>
-
-                {/* Code Tabs */}
-                <Tabs defaultValue="app" className="w-full">
-                  <div className="flex items-center justify-between mb-4">
-                    <TabsList>
-                      <TabsTrigger value="app">App Code</TabsTrigger>
-                      <TabsTrigger value="package">Package.json</TabsTrigger>
-                    </TabsList>
-                    <Button onClick={downloadApp} size="sm" variant="outline">
-                      <Download className="mr-2 h-4 w-4" />
-                      Download
-                    </Button>
-                  </div>
-                  
-                  <TabsContent value="app">
-                    <div className="relative">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="absolute top-2 right-2 z-10"
-                        onClick={() => copyToClipboard(generatedApp.appCode, 'App Code')}
-                      >
-                        <Copy className="mr-2 h-4 w-4" />
-                        Copy
-                      </Button>
-                      <pre className="bg-slate-900 text-slate-100 p-4 rounded-lg overflow-x-auto text-sm max-h-96">
-                        <code>{generatedApp.appCode}</code>
-                      </pre>
-                    </div>
-                  </TabsContent>
-                  
-                  <TabsContent value="package">
-                    <div className="relative">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="absolute top-2 right-2 z-10"
-                        onClick={() => copyToClipboard(generatedApp.packageJson, 'Package.json')}
-                      >
-                        <Copy className="mr-2 h-4 w-4" />
-                        Copy
-                      </Button>
-                      <pre className="bg-slate-900 text-slate-100 p-4 rounded-lg overflow-x-auto text-sm max-h-96">
-                        <code>{generatedApp.packageJson}</code>
-                      </pre>
-                    </div>
-                  </TabsContent>
-                </Tabs>
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+          </div>
         )}
       </div>
     </div>
   )
 }
 
-// App generation logic
-function generateAppFromIdea(idea: string, platform: 'web' | 'android' | 'ios'): GeneratedApp {
+// Enhanced app generation logic
+function generateAppFromIdea(idea: string, platforms: { web: boolean; android: boolean; ios: boolean }, buildSystem: 'eas' | 'capacitor'): GeneratedApp {
   const appName = generateAppName(idea)
+  const selectedPlatforms = Object.entries(platforms)
+    .filter(([_, selected]) => selected)
+    .map(([name, _]) => name)
+
+  const generatedFiles = []
   
-  if (platform === 'web') {
-    return generateWebApp(idea, appName)
-  } else {
-    return generateMobileApp(idea, appName, platform)
+  // Generate based on selected platforms
+  if (platforms.web) {
+    generatedFiles.push(...generateWebFiles(idea, appName))
+  }
+  
+  if (platforms.android || platforms.ios) {
+    generatedFiles.push(...generateMobileFiles(idea, appName, buildSystem))
+  }
+
+  const buildCommand = platforms.web 
+    ? "vercel --prod" 
+    : `eas build --platform ${platforms.android && platforms.ios ? 'all' : platforms.android ? 'android' : 'ios'} --non-interactive`
+
+  const instructions = platforms.web
+    ? "Deploy to Vercel: Connect your repository and deploy automatically."
+    : "Build with EAS: Run the build command and deploy to app stores."
+
+  const assumptions = [
+    "Cloud-ready project structure",
+    "Automated build configuration",
+    "Cross-platform compatibility",
+    "Production-ready code"
+  ]
+
+  return {
+    name: appName,
+    platforms: selectedPlatforms,
+    buildCommand,
+    generatedFiles,
+    instructions,
+    assumptions
   }
 }
 
-function generateAppName(idea: string): string {
-  const keywords = idea.toLowerCase().split(' ')
-  const nameWords = keywords.filter(word => 
-    word.length > 3 && 
-    !['with', 'that', 'for', 'and', 'the', 'app', 'application'].includes(word)
-  ).slice(0, 2)
-  
-  if (nameWords.length === 0) {
-    return 'MyApp'
-  }
-  
-  return nameWords.map(word => 
-    word.charAt(0).toUpperCase() + word.slice(1)
-  ).join('')
-}
-
-function generateWebApp(idea: string, appName: string): GeneratedApp {
+function generateWebFiles(idea: string, appName: string) {
   const isTodoApp = idea.toLowerCase().includes('todo')
-  const isRecipeApp = idea.toLowerCase().includes('recipe')
-  const isWorkoutApp = idea.toLowerCase().includes('workout')
-  const isHabitApp = idea.toLowerCase().includes('habit')
-  const isNoteApp = idea.toLowerCase().includes('note')
-  const isBudgetApp = idea.toLowerCase().includes('budget')
-
-  let appCode = ''
   
+  let appCode = ''
   if (isTodoApp) {
     appCode = `import { useState, useEffect } from 'react'
 
 export default function ${appName}() {
   const [todos, setTodos] = useState([])
   const [newTodo, setNewTodo] = useState('')
-  const [category, setCategory] = useState('personal')
 
   useEffect(() => {
     const saved = localStorage.getItem('${appName.toLowerCase()}-todos')
@@ -355,7 +622,6 @@ export default function ${appName}() {
       setTodos([...todos, {
         id: Date.now(),
         text: newTodo,
-        category,
         completed: false,
         createdAt: new Date().toISOString()
       }])
@@ -373,9 +639,6 @@ export default function ${appName}() {
     setTodos(todos.filter(todo => todo.id !== id))
   }
 
-  const categories = ['personal', 'work', 'shopping', 'health']
-  const filteredTodos = todos.filter(todo => todo.category === category)
-
   return (
     <div className="min-h-screen bg-gray-50 p-4">
       <div className="max-w-2xl mx-auto">
@@ -391,15 +654,6 @@ export default function ${appName}() {
               className="flex-1 p-2 border rounded"
               onKeyPress={(e) => e.key === 'Enter' && addTodo()}
             />
-            <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              className="p-2 border rounded"
-            >
-              {categories.map(cat => (
-                <option key={cat} value={cat}>{cat}</option>
-              ))}
-            </select>
             <button
               onClick={addTodo}
               className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
@@ -407,26 +661,10 @@ export default function ${appName}() {
               Add
             </button>
           </div>
-          
-          <div className="flex gap-2 mb-4">
-            {categories.map(cat => (
-              <button
-                key={cat}
-                onClick={() => setCategory(cat)}
-                className={\`px-3 py-1 rounded text-sm \${
-                  category === cat 
-                    ? 'bg-blue-500 text-white' 
-                    : 'bg-gray-200 text-gray-700'
-                }\`}
-              >
-                {cat}
-              </button>
-            ))}
-          </div>
         </div>
 
         <div className="space-y-2">
-          {filteredTodos.map(todo => (
+          {todos.map(todo => (
             <div
               key={todo.id}
               className="bg-white rounded-lg shadow p-4 flex items-center"
@@ -454,7 +692,7 @@ export default function ${appName}() {
             </div>
           ))}
           
-          {filteredTodos.length === 0 && (
+          {todos.length === 0 && (
             <div className="text-center py-8 text-gray-500">
               No todos yet. Add one above!
             </div>
@@ -464,188 +702,7 @@ export default function ${appName}() {
     </div>
   )
 }`
-  } else if (isRecipeApp) {
-    appCode = `import { useState, useEffect } from 'react'
-
-export default function ${appName}() {
-  const [recipes, setRecipes] = useState([])
-  const [newRecipe, setNewRecipe] = useState({
-    name: '',
-    ingredients: '',
-    instructions: '',
-    cookingTime: 30
-  })
-  const [selectedRecipe, setSelectedRecipe] = useState(null)
-
-  useEffect(() => {
-    const saved = localStorage.getItem('${appName.toLowerCase()}-recipes')
-    if (saved) setRecipes(JSON.parse(saved))
-  }, [])
-
-  useEffect(() => {
-    localStorage.setItem('${appName.toLowerCase()}-recipes', JSON.stringify(recipes))
-  }, [recipes])
-
-  const addRecipe = () => {
-    if (newRecipe.name.trim()) {
-      const recipe = {
-        id: Date.now(),
-        ...newRecipe,
-        ingredients: newRecipe.ingredients.split('\\n').filter(i => i.trim()),
-        createdAt: new Date().toISOString()
-      }
-      setRecipes([...recipes, recipe])
-      setNewRecipe({
-        name: '',
-        ingredients: '',
-        instructions: '',
-        cookingTime: 30
-      })
-    }
-  }
-
-  const deleteRecipe = (id) => {
-    setRecipes(recipes.filter(recipe => recipe.id !== id))
-    if (selectedRecipe && selectedRecipe.id === id) {
-      setSelectedRecipe(null)
-    }
-  }
-
-  return (
-    <div className="min-h-screen bg-amber-50 p-4">
-      <div className="max-w-4xl mx-auto">
-        <h1 className="text-3xl font-bold text-center mb-8">${appName}</h1>
-        
-        <div className="grid md:grid-cols-2 gap-6">
-          <div className="bg-white rounded-lg shadow-md p-6">
-            <h2 className="text-xl font-semibold mb-4">Add New Recipe</h2>
-            
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium mb-1">Recipe Name</label>
-                <input
-                  type="text"
-                  value={newRecipe.name}
-                  onChange={(e) => setNewRecipe({...newRecipe, name: e.target.value})}
-                  className="w-full p-2 border rounded"
-                  placeholder="e.g., Chocolate Chip Cookies"
-                />
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium mb-1">Ingredients (one per line)</label>
-                <textarea
-                  value={newRecipe.ingredients}
-                  onChange={(e) => setNewRecipe({...newRecipe, ingredients: e.target.value})}
-                  className="w-full p-2 border rounded h-24"
-                  placeholder="2 cups flour\\n1 cup sugar..."
-                />
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium mb-1">Instructions</label>
-                <textarea
-                  value={newRecipe.instructions}
-                  onChange={(e) => setNewRecipe({...newRecipe, instructions: e.target.value})}
-                  className="w-full p-2 border rounded h-32"
-                  placeholder="Mix ingredients... Bake at 350°F..."
-                />
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium mb-1">Cooking Time (minutes)</label>
-                <input
-                  type="number"
-                  value={newRecipe.cookingTime}
-                  onChange={(e) => setNewRecipe({...newRecipe, cookingTime: parseInt(e.target.value) || 0})}
-                  className="w-full p-2 border rounded"
-                  min="1"
-                />
-              </div>
-              
-              <button
-                onClick={addRecipe}
-                className="w-full py-2 bg-amber-500 text-white rounded hover:bg-amber-600"
-              >
-                Add Recipe
-              </button>
-            </div>
-          </div>
-          
-          <div className="bg-white rounded-lg shadow-md p-6">
-            <h2 className="text-xl font-semibold mb-4">Your Recipes</h2>
-            
-            <div className="space-y-3 max-h-96 overflow-y-auto">
-              {recipes.map(recipe => (
-                <div
-                  key={recipe.id}
-                  className={\`p-3 border rounded cursor-pointer hover:bg-amber-50 \${
-                    selectedRecipe && selectedRecipe.id === recipe.id ? 'border-amber-500 bg-amber-50' : ''
-                  }\`}
-                  onClick={() => setSelectedRecipe(recipe)}
-                >
-                  <div className="flex justify-between items-start">
-                    <h3 className="font-medium">{recipe.name}</h3>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        deleteRecipe(recipe.id)
-                      }}
-                      className="text-red-500 hover:text-red-700"
-                    >
-                      ×
-                    </button>
-                  </div>
-                  <div className="text-sm text-gray-500 mt-1">
-                    {recipe.ingredients.length} ingredients • {recipe.cookingTime} mins
-                  </div>
-                </div>
-              ))}
-              
-              {recipes.length === 0 && (
-                <div className="text-center py-8 text-gray-500">
-                  No recipes yet. Add one above!
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-        
-        {selectedRecipe && (
-          <div className="mt-6 bg-white rounded-lg shadow-md p-6">
-            <div className="flex justify-between items-start mb-4">
-              <h2 className="text-2xl font-bold">{selectedRecipe.name}</h2>
-              <div className="text-amber-600 font-medium">
-                {selectedRecipe.cookingTime} mins
-              </div>
-            </div>
-            
-            <div className="grid md:grid-cols-2 gap-6">
-              <div>
-                <h3 className="font-semibold mb-2">Ingredients</h3>
-                <ul className="space-y-1">
-                  {selectedRecipe.ingredients.map((ingredient, index) => (
-                    <li key={index} className="flex items-start">
-                      <span className="mr-2">•</span>
-                      <span>{ingredient}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-              
-              <div>
-                <h3 className="font-semibold mb-2">Instructions</h3>
-                <p className="whitespace-pre-line">{selectedRecipe.instructions}</p>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}`
   } else {
-    // Generic app template
     appCode = `import { useState, useEffect } from 'react'
 
 export default function ${appName}() {
@@ -733,8 +790,16 @@ export default function ${appName}() {
 }`
   }
 
-  const packageJson = `{
-  "name": "${appName.toLowerCase().replace(/\s+/g, '-')}",
+  return [
+    {
+      filename: "pages/index.js",
+      content: appCode,
+      path: "/"
+    },
+    {
+      filename: "package.json",
+      content: `{
+  "name": "${appName.toLowerCase().replace(/\\s+/g, '-')}",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -759,49 +824,47 @@ export default function ${appName}() {
     "tailwindcss": "^3.3.0",
     "typescript": "^5"
   }
-}`
-
-  const instructions = `Copy the code into a Next.js project.
-Run \`npx create-next-app@latest .\` then \`npm run dev\`
-Open your browser to the local URL.`
-
-  const assumptions = [
-    "Local data saving so your work isn't lost",
-    "A clean, modern interface",
-    "The ability to add, view, and delete items"
-  ]
-
-  return {
-    name: appName,
-    platform: 'web',
-    packageJson,
-    appCode,
-    instructions,
-    assumptions
-  }
+}`,
+      path: "/"
+    },
+    {
+      filename: "next.config.js",
+      content: `/** @type {import('next').NextConfig} */
+const nextConfig = {
+  reactStrictMode: true,
+  swcMinify: true,
+  images: {
+    domains: ['example.com'],
+  },
 }
 
-function generateMobileApp(idea: string, appName: string, platform: 'android' | 'ios'): GeneratedApp {
-  const isTodoApp = idea.toLowerCase().includes('todo')
-  const isRecipeApp = idea.toLowerCase().includes('recipe')
-  const isWorkoutApp = idea.toLowerCase().includes('workout')
-  const isHabitApp = idea.toLowerCase().includes('habit')
-  const isNoteApp = idea.toLowerCase().includes('note')
-  const isBudgetApp = idea.toLowerCase().includes('budget')
+module.exports = nextConfig`,
+      path: "/"
+    },
+    {
+      filename: "vercel.json",
+      content: `{
+  "buildCommand": "npm run build",
+  "outputDirectory": ".next",
+  "installCommand": "npm install"
+}`,
+      path: "/"
+    }
+  ]
+}
 
-  let appCode = ''
+function generateMobileFiles(idea: string, appName: string, buildSystem: 'eas' | 'capacitor') {
+  const isTodoApp = idea.toLowerCase().includes('todo')
   
+  let appCode = ''
   if (isTodoApp) {
     appCode = `import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, Button, FlatList, TouchableOpacity, StyleSheet, Modal, Switch } from 'react-native';
+import { View, Text, TextInput, Button, FlatList, TouchableOpacity, StyleSheet, Switch } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function ${appName}() {
   const [todos, setTodos] = useState([]);
   const [newTodo, setNewTodo] = useState('');
-  const [modalVisible, setModalVisible] = useState(false);
-  const [selectedTodo, setSelectedTodo] = useState(null);
-  const [category, setCategory] = useState('personal');
 
   useEffect(() => {
     loadTodos();
@@ -829,7 +892,6 @@ export default function ${appName}() {
       const newTodos = [...todos, {
         id: Date.now(),
         text: newTodo,
-        category,
         completed: false,
         createdAt: new Date().toISOString()
       }];
@@ -853,14 +915,6 @@ export default function ${appName}() {
     saveTodos(newTodos);
   };
 
-  const openTodo = (todo) => {
-    setSelectedTodo(todo);
-    setModalVisible(true);
-  };
-
-  const categories = ['personal', 'work', 'shopping', 'health'];
-  const filteredTodos = todos.filter(todo => todo.category === category);
-
   return (
     <View style={styles.container}>
       <Text style={styles.title}>${appName}</Text>
@@ -872,36 +926,14 @@ export default function ${appName}() {
           onChangeText={setNewTodo}
           placeholder="Add a new todo..."
         />
-        <View style={styles.categoryContainer}>
-          {categories.map(cat => (
-            <TouchableOpacity
-              key={cat}
-              onPress={() => setCategory(cat)}
-              style={[
-                styles.categoryButton,
-                category === cat ? styles.selectedCategory : {}
-              ]}
-            >
-              <Text style={[
-                styles.categoryText,
-                category === cat ? styles.selectedCategoryText : {}
-              ]}>
-                {cat}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
         <Button title="Add" onPress={addTodo} />
       </View>
 
       <FlatList
-        data={filteredTodos}
+        data={todos}
         keyExtractor={item => item.id.toString()}
         renderItem={({ item }) => (
-          <TouchableOpacity 
-            style={styles.todoItem}
-            onPress={() => openTodo(item)}
-          >
+          <View style={styles.todoItem}>
             <View style={styles.todoContent}>
               <Switch
                 value={item.completed}
@@ -917,7 +949,7 @@ export default function ${appName}() {
             <TouchableOpacity onPress={() => deleteTodo(item.id)}>
               <Text style={styles.deleteButton}>×</Text>
             </TouchableOpacity>
-          </TouchableOpacity>
+          </View>
         )}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
@@ -925,34 +957,6 @@ export default function ${appName}() {
           </View>
         }
       />
-
-      <Modal
-        animationType="slide"
-        transparent={true}
-        visible={modalVisible}
-        onRequestClose={() => setModalVisible(!modalVisible)}
-      >
-        <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
-            {selectedTodo && (
-              <>
-                <Text style={styles.modalTitle}>{selectedTodo.text}</Text>
-                <Text style={styles.modalCategory}>Category: {selectedTodo.category}</Text>
-                <Text style={styles.modalDate}>
-                  Created: {new Date(selectedTodo.createdAt).toLocaleDateString()}
-                </Text>
-                <Text style={styles.modalStatus}>
-                  Status: {selectedTodo.completed ? 'Completed' : 'Pending'}
-                </Text>
-                <Button
-                  title="Close"
-                  onPress={() => setModalVisible(!modalVisible)}
-                />
-              </>
-            )}
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 }
@@ -979,25 +983,7 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     paddingHorizontal: 10,
     marginBottom: 10,
-  },
-  categoryContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 10,
-  },
-  categoryButton: {
-    padding: 5,
-    borderRadius: 5,
-    backgroundColor: '#e0e0e0',
-  },
-  selectedCategory: {
-    backgroundColor: '#2196F3',
-  },
-  categoryText: {
-    fontSize: 12,
-  },
-  selectedCategoryText: {
-    color: 'white',
+    backgroundColor: 'white',
   },
   todoItem: {
     backgroundColor: 'white',
@@ -1032,335 +1018,8 @@ const styles = StyleSheet.create({
   emptyText: {
     color: '#888',
   },
-  modalContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.5)',
-  },
-  modalContent: {
-    width: '80%',
-    backgroundColor: 'white',
-    borderRadius: 10,
-    padding: 20,
-    alignItems: 'center',
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginBottom: 10,
-  },
-  modalCategory: {
-    fontSize: 16,
-    marginBottom: 5,
-  },
-  modalDate: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 5,
-  },
-  modalStatus: {
-    fontSize: 16,
-    marginBottom: 20,
-  },
-});`
-  } else if (isRecipeApp) {
-    appCode = `import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, Button, FlatList, TouchableOpacity, StyleSheet, Modal, ScrollView } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-
-export default function ${appName}() {
-  const [recipes, setRecipes] = useState([]);
-  const [newRecipe, setNewRecipe] = useState({
-    name: '',
-    ingredients: '',
-    instructions: '',
-    cookingTime: 30
-  });
-  const [selectedRecipe, setSelectedRecipe] = useState(null);
-  const [modalVisible, setModalVisible] = useState(false);
-
-  useEffect(() => {
-    loadRecipes();
-  }, []);
-
-  const loadRecipes = async () => {
-    try {
-      const saved = await AsyncStorage.getItem('${appName.toLowerCase()}-recipes');
-      if (saved) setRecipes(JSON.parse(saved));
-    } catch (e) {
-      console.error('Failed to load recipes', e);
-    }
-  };
-
-  const saveRecipes = async (recipesList) => {
-    try {
-      await AsyncStorage.setItem('${appName.toLowerCase()}-recipes', JSON.stringify(recipesList));
-    } catch (e) {
-      console.error('Failed to save recipes', e);
-    }
-  };
-
-  const addRecipe = () => {
-    if (newRecipe.name.trim()) {
-      const recipe = {
-        id: Date.now(),
-        ...newRecipe,
-        ingredients: newRecipe.ingredients.split('\\n').filter(i => i.trim()),
-        createdAt: new Date().toISOString()
-      };
-      const newRecipes = [...recipes, recipe];
-      setRecipes(newRecipes);
-      saveRecipes(newRecipes);
-      setNewRecipe({
-        name: '',
-        ingredients: '',
-        instructions: '',
-        cookingTime: 30
-      });
-    }
-  };
-
-  const deleteRecipe = (id) => {
-    const newRecipes = recipes.filter(recipe => recipe.id !== id);
-    setRecipes(newRecipes);
-    saveRecipes(newRecipes);
-    if (selectedRecipe && selectedRecipe.id === id) {
-      setSelectedRecipe(null);
-    }
-  };
-
-  const openRecipe = (recipe) => {
-    setSelectedRecipe(recipe);
-    setModalVisible(true);
-  };
-
-  return (
-    <View style={styles.container}>
-      <Text style={styles.title}>${appName}</Text>
-      
-      <ScrollView style={styles.formContainer}>
-        <Text style={styles.label}>Recipe Name</Text>
-        <TextInput
-          style={styles.input}
-          value={newRecipe.name}
-          onChangeText={(text) => setNewRecipe({...newRecipe, name: text})}
-          placeholder="e.g., Chocolate Chip Cookies"
-        />
-        
-        <Text style={styles.label}>Ingredients (one per line)</Text>
-        <TextInput
-          style={[styles.input, styles.textArea]}
-          value={newRecipe.ingredients}
-          onChangeText={(text) => setNewRecipe({...newRecipe, ingredients: text})}
-          placeholder="2 cups flour\\n1 cup sugar..."
-          multiline
-        />
-        
-        <Text style={styles.label}>Instructions</Text>
-        <TextInput
-          style={[styles.input, styles.textArea]}
-          value={newRecipe.instructions}
-          onChangeText={(text) => setNewRecipe({...newRecipe, instructions: text})}
-          placeholder="Mix ingredients... Bake at 350°F..."
-          multiline
-        />
-        
-        <Text style={styles.label}>Cooking Time (minutes)</Text>
-        <TextInput
-          style={styles.input}
-          value={newRecipe.cookingTime.toString()}
-          onChangeText={(text) => setNewRecipe({...newRecipe, cookingTime: parseInt(text) || 0})}
-          placeholder="30"
-          keyboardType="numeric"
-        />
-        
-        <Button title="Add Recipe" onPress={addRecipe} />
-      </ScrollView>
-
-      <Text style={styles.sectionTitle}>Your Recipes</Text>
-      <FlatList
-        data={recipes}
-        keyExtractor={item => item.id.toString()}
-        renderItem={({ item }) => (
-          <TouchableOpacity 
-            style={styles.recipeItem}
-            onPress={() => openRecipe(item)}
-          >
-            <View style={styles.recipeContent}>
-              <Text style={styles.recipeName}>{item.name}</Text>
-              <Text style={styles.recipeInfo}>
-                {item.ingredients.length} ingredients • {item.cookingTime} mins
-              </Text>
-            </View>
-            <TouchableOpacity onPress={() => deleteRecipe(item.id)}>
-              <Text style={styles.deleteButton}>×</Text>
-            </TouchableOpacity>
-          </TouchableOpacity>
-        )}
-        ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Text style={styles.emptyText}>No recipes yet. Add one above!</Text>
-          </View>
-        }
-      />
-
-      <Modal
-        animationType="slide"
-        transparent={true}
-        visible={modalVisible}
-        onRequestClose={() => setModalVisible(!modalVisible)}
-      >
-        <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
-            {selectedRecipe && (
-              <ScrollView>
-                <Text style={styles.modalTitle}>{selectedRecipe.name}</Text>
-                <Text style={styles.modalCookingTime}>{selectedRecipe.cookingTime} mins</Text>
-                
-                <Text style={styles.modalSectionTitle}>Ingredients</Text>
-                {selectedRecipe.ingredients.map((ingredient, index) => (
-                  <Text key={index} style={styles.modalIngredient}>• {ingredient}</Text>
-                ))}
-                
-                <Text style={styles.modalSectionTitle}>Instructions</Text>
-                <Text style={styles.modalInstructions}>{selectedRecipe.instructions}</Text>
-                
-                <Button
-                  title="Close"
-                  onPress={() => setModalVisible(!modalVisible)}
-                />
-              </ScrollView>
-            )}
-          </View>
-        </View>
-      </Modal>
-    </View>
-  );
-}
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    padding: 20,
-    backgroundColor: '#fffbeb',
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    textAlign: 'center',
-    marginBottom: 20,
-    color: '#92400e',
-  },
-  formContainer: {
-    marginBottom: 20,
-  },
-  label: {
-    fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 5,
-    color: '#92400e',
-  },
-  input: {
-    height: 40,
-    borderColor: '#d97706',
-    borderWidth: 1,
-    borderRadius: 5,
-    paddingHorizontal: 10,
-    marginBottom: 15,
-    backgroundColor: 'white',
-  },
-  textArea: {
-    height: 80,
-    textAlignVertical: 'top',
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    marginBottom: 10,
-    color: '#92400e',
-  },
-  recipeItem: {
-    backgroundColor: 'white',
-    padding: 15,
-    borderRadius: 5,
-    marginBottom: 10,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#fbbf24',
-  },
-  recipeContent: {
-    flex: 1,
-  },
-  recipeName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#92400e',
-  },
-  recipeInfo: {
-    fontSize: 12,
-    color: '#92400e',
-    marginTop: 2,
-  },
-  deleteButton: {
-    fontSize: 20,
-    color: '#dc2626',
-  },
-  emptyContainer: {
-    padding: 20,
-    alignItems: 'center',
-  },
-  emptyText: {
-    color: '#92400e',
-  },
-  modalContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.5)',
-  },
-  modalContent: {
-    width: '90%',
-    backgroundColor: 'white',
-    borderRadius: 10,
-    padding: 20,
-    maxHeight: '80%',
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginBottom: 5,
-    color: '#92400e',
-    textAlign: 'center',
-  },
-  modalCookingTime: {
-    fontSize: 16,
-    color: '#d97706',
-    marginBottom: 20,
-    textAlign: 'center',
-  },
-  modalSectionTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    marginTop: 15,
-    marginBottom: 10,
-    color: '#92400e',
-  },
-  modalIngredient: {
-    fontSize: 14,
-    marginBottom: 5,
-    color: '#374151',
-  },
-  modalInstructions: {
-    fontSize: 14,
-    lineHeight: 20,
-    color: '#374151',
-  },
 });`
   } else {
-    // Generic mobile app template
     appCode = `import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, Button, FlatList, TouchableOpacity, StyleSheet } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -1507,7 +1166,15 @@ const styles = StyleSheet.create({
 });`
   }
 
-  const packageJson = `{
+  const files = [
+    {
+      filename: "App.js",
+      content: appCode,
+      path: "/"
+    },
+    {
+      filename: "package.json",
+      content: `{
   "name": "${appName.toLowerCase().replace(/\\s+/g, '-')}",
   "version": "1.0.0",
   "main": "node_modules/expo/AppEntry.js",
@@ -1515,7 +1182,8 @@ const styles = StyleSheet.create({
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "build": "eas build --platform all"
   },
   "dependencies": {
     "expo": "~49.0.0",
@@ -1527,24 +1195,114 @@ const styles = StyleSheet.create({
     "@babel/core": "^7.20.0"
   },
   "private": true
-}`
-
-  const instructions = `Copy all code into a single App.js file.
-Run \`npm install\` then \`npx expo start\`
-Scan the QR code with your phone's camera (Expo Go app required).`
-
-  const assumptions = [
-    "Local data saving so your work isn't lost",
-    "A clean, modern interface",
-    "The ability to add, view, and delete items"
+}`,
+      path: "/"
+    }
   ]
 
-  return {
-    name: appName,
-    platform,
-    packageJson,
-    appCode,
-    instructions,
-    assumptions
+  if (buildSystem === 'eas') {
+    files.push(
+      {
+        filename: "app.json",
+        content: `{
+  "expo": {
+    "name": "${appName}",
+    "slug": "${appName.toLowerCase().replace(/\\s+/g, '-')}",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#FFFFFF"
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "owner": "your-username",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    }
   }
+}`,
+        path: "/"
+      },
+      {
+        filename: "eas.json",
+        content: `{
+  "cli": {
+    "version": ">= 3.0.0"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal"
+    },
+    "preview": {
+      "distribution": "preview"
+    },
+    "production": {
+      "distribution": "store"
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}`,
+        path: "/"
+      }
+    )
+  } else {
+    files.push(
+      {
+        filename: "capacitor.config.json",
+        content: `{
+  "appId": "com.example.${appName.toLowerCase().replace(/\\s+/g, '')}",
+  "appName": "${appName}",
+  "webDir": "dist",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    }
+  }
+}`,
+        path: "/"
+      }
+    )
+  }
+
+  return files
+}
+
+function generateAppName(idea: string): string {
+  const keywords = idea.toLowerCase().split(' ')
+  const nameWords = keywords.filter(word => 
+    word.length > 3 && 
+    !['with', 'that', 'for', 'and', 'the', 'app', 'application'].includes(word)
+  ).slice(0, 2)
+  
+  if (nameWords.length === 0) {
+    return 'MyApp'
+  }
+  
+  return nameWords.map(word => 
+    word.charAt(0).toUpperCase() + word.slice(1)
+  ).join('')
 }
