@@ -1,13 +1,19 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Copy, Download, Sparkles, Code, Smartphone, Monitor, Eye, Settings, Play, Loader2 } from 'lucide-react'
+import { Copy, Download, Sparkles, Code, Smartphone, Monitor, Eye, Settings, Play, Loader2, Mic, MicOff, Volume2 } from 'lucide-react'
 import { toast } from '@/hooks/use-toast'
+import dynamic from 'next/dynamic'
+
+// Dynamically import voice components to avoid SSR issues
+const VoiceInputGoogle = dynamic(() => import('@/components/voice/VoiceInputGoogle'), { ssr: false })
+const ConversationDialog = dynamic(() => import('@/components/voice/ConversationDialog'), { ssr: false })
+const TranscriptDisplay = dynamic(() => import('@/components/voice/TranscriptDisplay'), { ssr: false })
 
 interface GeneratedApp {
   name: string
@@ -38,6 +44,235 @@ export default function Home() {
   const [previewMode, setPreviewMode] = useState(false)
   const [buildStatuses, setBuildStatuses] = useState<BuildStatus[]>([])
   const [selectedFile, setSelectedFile] = useState<string>('App.js')
+  const [tasks, setTasks] = useState([
+    { id: 1, title: 'Complete project proposal', due: 'Due today', completed: false, priority: 'blue' },
+    { id: 2, title: 'Review code changes', due: 'Completed', completed: true, priority: 'green' },
+    { id: 3, title: 'Team meeting at 2 PM', due: 'High priority', completed: false, priority: 'yellow' }
+  ])
+  const [newTask, setNewTask] = useState('')
+  const [testState, setTestState] = useState('Initial State')
+  
+  // Voice recording state
+  const [isRecording, setIsRecording] = useState(false)
+  const [isListening, setIsListening] = useState(false)
+  const [transcript, setTranscript] = useState('')
+  const [voiceTranscript, setVoiceTranscript] = useState('')
+  const [voiceRequirements, setVoiceRequirements] = useState<any>(null)
+  const [conversationMessages, setConversationMessages] = useState<Array<{role: string, content: string}>>([])
+  const [voiceEnabled, setVoiceEnabled] = useState(true)
+  const [inputMode, setInputMode] = useState<'text' | 'voice'>('text')
+  const recognitionRef = useRef<any>(null)
+  const synthRef = useRef<SpeechSynthesis | null>(null)
+
+  // Initialize speech recognition and synthesis
+  useEffect(() => {
+    // Initialize speech synthesis
+    synthRef.current = window.speechSynthesis
+    
+    // Initialize speech recognition
+    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+      recognitionRef.current = new SpeechRecognition()
+      recognitionRef.current.continuous = true
+      recognitionRef.current.interimResults = true
+      recognitionRef.current.lang = 'en-US'
+
+      recognitionRef.current.onresult = (event: any) => {
+        let finalTranscript = ''
+        let interimTranscript = ''
+
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript
+          if (event.results[i].isFinal) {
+            finalTranscript += transcript + ' '
+          } else {
+            interimTranscript += transcript
+          }
+        }
+
+        setTranscript(finalTranscript + interimTranscript)
+        if (finalTranscript) {
+          setIdea(prev => prev + finalTranscript)
+        }
+      }
+
+      recognitionRef.current.onerror = (event: any) => {
+        console.error('Speech recognition error:', event.error)
+        setIsListening(false)
+        setIsRecording(false)
+        toast({
+          title: "Voice Recognition Error",
+          description: `Error: ${event.error}`,
+          variant: "destructive"
+        })
+      }
+
+      recognitionRef.current.onend = () => {
+        if (isListening) {
+          // Restart recognition if we're still supposed to be listening
+          recognitionRef.current.start()
+        }
+      }
+    }
+
+    return () => {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop()
+      }
+      if (synthRef.current) {
+        synthRef.current.cancel()
+      }
+    }
+  }, [isListening])
+
+  // Voice control functions
+  const startVoiceInput = () => {
+    if (!recognitionRef.current) {
+      toast({
+        title: "Voice Recognition Not Supported",
+        description: "Your browser doesn't support speech recognition.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    setIsListening(true)
+    setIsRecording(true)
+    recognitionRef.current.start()
+    
+    toast({
+      title: "Voice Input Activated",
+      description: "Speak your app idea now..."
+    })
+  }
+
+  const stopVoiceInput = () => {
+    if (recognitionRef.current) {
+      recognitionRef.current.stop()
+    }
+    setIsListening(false)
+    setIsRecording(false)
+    
+    toast({
+      title: "Voice Input Stopped",
+      description: "Your speech has been transcribed."
+    })
+  }
+
+  const speakText = (text: string) => {
+    if (!synthRef.current) {
+      toast({
+        title: "Speech Synthesis Not Supported",
+        description: "Your browser doesn't support speech synthesis.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    if (synthRef.current.speaking) {
+      synthRef.current.cancel()
+    }
+
+    const utterance = new SpeechSynthesisUtterance(text)
+    utterance.rate = 1
+    utterance.pitch = 1
+    utterance.volume = 1
+    
+    synthRef.current.speak(utterance)
+  }
+
+  const speakAppSummary = () => {
+    if (!generatedApp) return
+    
+    const summary = `I have generated ${generatedApp.name} for ${generatedApp.platforms.join(', ')}. 
+      The app is ready for preview and build. You can download the project files or start building for your selected platforms.`
+    
+    speakText(summary)
+  }
+
+  // Voice-to-App handlers
+  const handleVoiceTranscript = (transcript: string) => {
+    setVoiceTranscript(transcript)
+    setIdea(transcript) // Update the main idea field
+  }
+
+  const handleVoiceRequirementsExtracted = (requirements: any) => {
+    setVoiceRequirements(requirements)
+    
+    // Update platform selection based on voice requirements
+    if (requirements.platforms) {
+      const newPlatform = { ...platform }
+      requirements.platforms.forEach((p: string) => {
+        if (p === 'web') newPlatform.web = true
+        if (p === 'android') newPlatform.android = true
+        if (p === 'ios') newPlatform.ios = true
+      })
+      setPlatform(newPlatform)
+    }
+  }
+
+  const handleVoiceConversationResponse = (response: any) => {
+    setConversationMessages(prev => [...prev, { role: 'assistant', content: response.message }])
+    
+    // If voice response is available, speak it
+    if (voiceEnabled && response.message) {
+      speakText(response.message)
+    }
+  }
+
+  const handleConversationMessage = (message: string) => {
+    setConversationMessages(prev => [...prev, { role: 'user', content: message }])
+    
+    // In a real implementation, this would send to the conversation API
+    // For now, simulate a response
+    setTimeout(() => {
+      const aiResponse = generateAIResponse(message)
+      setConversationMessages(prev => [...prev, { role: 'assistant', content: aiResponse }])
+      
+      if (voiceEnabled) {
+        speakText(aiResponse)
+      }
+    }, 1000)
+  }
+
+  const generateAIResponse = (userMessage: string): string => {
+    const lowerMessage = userMessage.toLowerCase()
+    
+    if (lowerMessage.includes('hello') || lowerMessage.includes('hi')) {
+      return "Hello! I'm here to help you create your perfect app. Tell me what you have in mind!"
+    }
+    
+    if (lowerMessage.includes('todo')) {
+      return "A todo app sounds great! I can help you create a task management system. Would you like features like reminders, categories, and due dates?"
+    }
+    
+    if (lowerMessage.includes('recipe')) {
+      return "A recipe manager is an excellent idea! I can include features like ingredient lists, cooking instructions, and shopping lists. What else would you like it to do?"
+    }
+    
+    if (lowerMessage.includes('fitness') || lowerMessage.includes('workout')) {
+      return "A fitness tracker would be awesome! I can build exercise logging, progress tracking, and workout planning features. What specific exercises do you want to track?"
+    }
+    
+    return "That sounds interesting! Tell me more about what features you'd like in your app, and I'll help you create something amazing."
+  }
+
+  const generateAppFromVoice = () => {
+    if (!voiceRequirements) {
+      toast({
+        title: "No Voice Requirements",
+        description: "Please use voice input first to capture your app requirements",
+        variant: "destructive"
+      })
+      return
+    }
+
+    // Set the idea based on voice transcript
+    setIdea(voiceTranscript)
+    
+    // Generate the app
+    handleGenerate()
+  }
 
   const handleGenerate = async () => {
     if (!idea.trim() || !Object.values(platform).some(v => v)) {
@@ -57,6 +292,7 @@ export default function Home() {
       
       const app = generateAppFromIdea(idea, platform, buildSystem)
       setGeneratedApp(app)
+      setPreviewMode(true) // Automatically switch to preview mode after generation
       
       // Initialize build statuses
       const initialStatuses: BuildStatus[] = app.platforms.map(p => ({
@@ -70,6 +306,11 @@ export default function Home() {
         title: "App Generated Successfully!",
         description: `Your ${app.name} is ready for preview and build.`
       })
+      
+      // Voice feedback for successful generation
+      setTimeout(() => {
+        speakText(`Great! I've generated ${app.name} for ${app.platforms.join(', ')}. Your app is ready for preview and build.`)
+      }, 500)
     } catch (error) {
       toast({
         title: "Generation Failed",
@@ -184,6 +425,30 @@ export default function Home() {
     }
   }
 
+  const toggleTask = (taskId: number) => {
+    setTasks(tasks.map(task => 
+      task.id === taskId ? { ...task, completed: !task.completed } : task
+    ))
+  }
+
+  const addTask = () => {
+    if (newTask.trim()) {
+      const newTaskObj = {
+        id: tasks.length + 1,
+        title: newTask.trim(),
+        due: 'New task',
+        completed: false,
+        priority: 'blue'
+      }
+      setTasks([...tasks, newTaskObj])
+      setNewTask('')
+      toast({
+        title: "Task Added!",
+        description: "New task has been added to your list."
+      })
+    }
+  }
+
   const getPlatformIcon = (platform: string) => {
     switch (platform) {
       case 'web': return Monitor
@@ -224,133 +489,291 @@ export default function Home() {
           </p>
         </div>
 
+        {/* ALWAYS VISIBLE TEST PREVIEW */}
+        <Card>
+          <CardContent className="p-6">
+            <div className="text-center">
+              <h2 className="text-2xl font-bold text-red-500">ALWAYS VISIBLE TEST</h2>
+              <p>This should always be visible to test basic rendering.</p>
+              <p className="text-sm">Test State: {testState}</p>
+              <button 
+                onClick={() => setTestState('Updated State!')}
+                className="mt-2 px-4 py-2 bg-blue-500 text-white rounded"
+              >
+                Update State
+              </button>
+            </div>
+          </CardContent>
+        </Card>
+
         {/* Main Interface */}
         {!generatedApp ? (
-          <div className="grid lg:grid-cols-2 gap-8 mb-12">
-            {/* Input Section */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Sparkles className="h-5 w-5" />
-                  Your App Idea
-                </CardTitle>
-                <CardDescription>
-                  Describe your app idea in plain English. I'll handle the rest.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                <Textarea
-                  placeholder="e.g., A todo app that syncs across devices, A recipe manager with shopping lists, A fitness tracker for workouts..."
-                  value={idea}
-                  onChange={(e) => setIdea(e.target.value)}
-                  className="min-h-[120px] resize-none"
-                />
-                
-                <div>
-                  <label className="text-sm font-medium mb-3 block">Select Platforms</label>
-                  <div className="grid grid-cols-3 gap-3">
-                    {[
-                      { id: 'web', icon: Monitor, label: 'Web', desc: 'Next.js' },
-                      { id: 'android', icon: Smartphone, label: 'Android', desc: 'React Native' },
-                      { id: 'ios', icon: Smartphone, label: 'iOS', desc: 'React Native' }
-                    ].map((p) => (
-                      <button
-                        key={p.id}
-                        onClick={() => setPlatform(prev => ({ ...prev, [p.id]: !prev[p.id as keyof typeof prev] }))}
-                        className={`p-4 border-2 rounded-lg text-center transition-all hover:shadow-md ${
-                          platform[p.id as keyof typeof platform]
-                            ? 'border-primary bg-primary/5'
-                            : 'border-border hover:border-primary/50'
-                        }`}
-                      >
-                        <p.icon className="h-8 w-8 mx-auto mb-2 text-primary" />
-                        <div className="font-medium">{p.label}</div>
-                        <div className="text-xs text-muted-foreground">{p.desc}</div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
+          <div className="space-y-8 mb-12">
+            {/* Input Mode Tabs */}
+            <Tabs value={inputMode} onValueChange={(value) => setInputMode(value as 'text' | 'voice')}>
+              <TabsList className="grid w-full grid-cols-2">
+                <TabsTrigger value="text" className="flex items-center gap-2">
+                  <Sparkles className="h-4 w-4" />
+                  Text Input
+                </TabsTrigger>
+                <TabsTrigger value="voice" className="flex items-center gap-2">
+                  <Mic className="h-4 w-4" />
+                  Voice Input
+                </TabsTrigger>
+              </TabsList>
 
-                <div>
-                  <label className="text-sm font-medium mb-3 block">Build System</label>
-                  <div className="grid grid-cols-2 gap-3">
-                    {[
-                      { id: 'eas', label: 'Expo EAS', desc: 'Cloud builds' },
-                      { id: 'capacitor', label: 'Capacitor', desc: 'Native builds' }
-                    ].map((b) => (
-                      <button
-                        key={b.id}
-                        onClick={() => setBuildSystem(b.id as 'eas' | 'capacitor')}
-                        className={`p-4 border-2 rounded-lg text-center transition-all hover:shadow-md ${
-                          buildSystem === b.id
-                            ? 'border-primary bg-primary/5'
-                            : 'border-border hover:border-primary/50'
-                        }`}
-                      >
-                        <div className="font-medium">{b.label}</div>
-                        <div className="text-xs text-muted-foreground">{b.desc}</div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                
-                <Button 
-                  onClick={handleGenerate} 
-                  disabled={!idea.trim() || !selectedPlatforms.length || isGenerating}
-                  className="w-full"
-                  size="lg"
-                >
-                  {isGenerating ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Generating Your App...
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="mr-2 h-4 w-4" />
-                      Generate My App
-                    </>
-                  )}
-                </Button>
-              </CardContent>
-            </Card>
-
-            {/* Examples Section */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Example Ideas</CardTitle>
-                <CardDescription>
-                  Click on any example to get started quickly
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3">
-                  {[
-                    "A simple todo list with categories and due dates",
-                    "A recipe manager with ingredient lists and cooking instructions",
-                    "A workout tracker for logging exercises and progress",
-                    "A habit tracker with streaks and daily reminders",
-                    "A note-taking app with tags and search functionality",
-                    "A budget tracker for income and expenses",
-                    "A water intake tracker with reminders",
-                    "A book club snack organizer"
-                  ].map((example, index) => (
-                    <button
-                      key={index}
-                      onClick={() => setIdea(example)}
-                      className="w-full text-left p-3 rounded-lg border border-border hover:border-primary/50 hover:bg-primary/5 transition-colors"
-                    >
-                      <div className="flex items-center gap-2">
-                        <Badge variant="outline" className="text-xs">
-                          Example {index + 1}
-                        </Badge>
-                        <span className="text-sm">{example}</span>
+              <TabsContent value="text" className="space-y-6">
+                <div className="grid lg:grid-cols-2 gap-8">
+                  {/* Text Input Section */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <Sparkles className="h-5 w-5" />
+                        Your App Idea
+                      </CardTitle>
+                      <CardDescription>
+                        Describe your app idea in plain English. I'll handle the rest.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-6">
+                      <div className="relative">
+                        <Textarea
+                          placeholder="e.g., A todo app that syncs across devices, A recipe manager with shopping lists, A fitness tracker for workouts..."
+                          value={idea}
+                          onChange={(e) => setIdea(e.target.value)}
+                          className="min-h-[120px] resize-none pr-12"
+                        />
+                        <Button
+                          size="sm"
+                          variant={isRecording ? "destructive" : "outline"}
+                          className="absolute top-2 right-2 h-8 w-8 p-0"
+                          onClick={isRecording ? stopVoiceInput : startVoiceInput}
+                        >
+                          {isRecording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+                        </Button>
                       </div>
-                    </button>
-                  ))}
+                      
+                      {/* Voice input status */}
+                      {isListening && (
+                        <div className="flex items-center gap-2 p-3 bg-blue-50 rounded-lg">
+                          <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
+                          <span className="text-sm text-blue-700">Listening... Speak your app idea</span>
+                          <Button 
+                            size="sm" 
+                            variant="outline" 
+                            onClick={stopVoiceInput}
+                            className="ml-auto"
+                          >
+                            Stop
+                          </Button>
+                        </div>
+                      )}
+                      
+                      {transcript && (
+                        <div className="p-3 bg-gray-50 rounded-lg">
+                          <div className="text-xs text-gray-500 mb-1">Live transcription:</div>
+                          <div className="text-sm">{transcript}</div>
+                        </div>
+                      )}
+                      
+                      <div>
+                        <label className="text-sm font-medium mb-3 block">Select Platforms</label>
+                        <div className="grid grid-cols-3 gap-3">
+                          {[
+                            { id: 'web', icon: Monitor, label: 'Web', desc: 'Next.js' },
+                            { id: 'android', icon: Smartphone, label: 'Android', desc: 'React Native' },
+                            { id: 'ios', icon: Smartphone, label: 'iOS', desc: 'React Native' }
+                          ].map((p) => (
+                            <button
+                              key={p.id}
+                              onClick={() => setPlatform(prev => ({ ...prev, [p.id]: !prev[p.id as keyof typeof prev] }))}
+                              className={`p-4 border-2 rounded-lg text-center transition-all hover:shadow-md ${
+                                platform[p.id as keyof typeof platform]
+                                  ? 'border-primary bg-primary/5'
+                                  : 'border-border hover:border-primary/50'
+                              }`}
+                            >
+                              <p.icon className="h-8 w-8 mx-auto mb-2 text-primary" />
+                              <div className="font-medium">{p.label}</div>
+                              <div className="text-xs text-muted-foreground">{p.desc}</div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="text-sm font-medium mb-3 block">Build System</label>
+                        <div className="grid grid-cols-2 gap-3">
+                          {[
+                            { id: 'eas', label: 'Expo EAS', desc: 'Cloud builds' },
+                            { id: 'capacitor', label: 'Capacitor', desc: 'Native builds' }
+                          ].map((b) => (
+                            <button
+                              key={b.id}
+                              onClick={() => setBuildSystem(b.id as 'eas' | 'capacitor')}
+                              className={`p-4 border-2 rounded-lg text-center transition-all hover:shadow-md ${
+                                buildSystem === b.id
+                                  ? 'border-primary bg-primary/5'
+                                  : 'border-border hover:border-primary/50'
+                              }`}
+                            >
+                              <div className="font-medium">{b.label}</div>
+                              <div className="text-xs text-muted-foreground">{b.desc}</div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      
+                      <Button 
+                        onClick={handleGenerate} 
+                        disabled={!idea.trim() || !selectedPlatforms.length || isGenerating}
+                        className="w-full"
+                        size="lg"
+                      >
+                        {isGenerating ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Generating Your App...
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="mr-2 h-4 w-4" />
+                            Generate My App
+                          </>
+                        )}
+                      </Button>
+                    </CardContent>
+                  </Card>
+
+                  {/* Examples Section */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Example Ideas</CardTitle>
+                      <CardDescription>
+                        Click on any example to get started quickly
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-3">
+                        {[
+                          "A simple todo list with categories and due dates",
+                          "A recipe manager with ingredient lists and cooking instructions",
+                          "A workout tracker for logging exercises and progress",
+                          "A habit tracker with streaks and daily reminders",
+                          "A note-taking app with tags and search functionality",
+                          "A budget tracker for income and expenses",
+                          "A water intake tracker with reminders",
+                          "A book club snack organizer"
+                        ].map((example, index) => (
+                          <button
+                            key={index}
+                            onClick={() => setIdea(example)}
+                            className="w-full text-left p-3 rounded-lg border border-border hover:border-primary/50 hover:bg-primary/5 transition-colors"
+                          >
+                            <div className="flex items-center gap-2">
+                              <Badge variant="outline" className="text-xs">
+                                Example {index + 1}
+                              </Badge>
+                              <span className="text-sm">{example}</span>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
                 </div>
-              </CardContent>
-            </Card>
+              </TabsContent>
+
+              <TabsContent value="voice" className="space-y-6">
+                <div className="grid lg:grid-cols-2 gap-8">
+                  {/* Voice Input Section */}
+                  <div className="space-y-6">
+                    {typeof window !== 'undefined' && (
+                      <VoiceInputGoogle
+                        onTranscript={handleVoiceTranscript}
+                        onRequirementsExtracted={handleVoiceRequirementsExtracted}
+                        onConversationResponse={handleVoiceConversationResponse}
+                        disabled={isGenerating}
+                      />
+                    )}
+                    
+                    {/* Voice Controls */}
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                          <Volume2 className="h-5 w-5" />
+                          Voice Settings
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm">Voice Feedback</span>
+                          <Button
+                            onClick={() => setVoiceEnabled(!voiceEnabled)}
+                            variant={voiceEnabled ? "default" : "outline"}
+                            size="sm"
+                          >
+                            {voiceEnabled ? "Enabled" : "Disabled"}
+                          </Button>
+                        </div>
+                        
+                        <Button
+                          onClick={generateAppFromVoice}
+                          disabled={!voiceRequirements || isGenerating}
+                          className="w-full"
+                          size="lg"
+                        >
+                          {isGenerating ? (
+                            <>
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              Generating from Voice...
+                            </>
+                          ) : (
+                            <>
+                              <Sparkles className="mr-2 h-4 w-4" />
+                              Generate App from Voice
+                            </>
+                          )}
+                        </Button>
+                        
+                        {voiceRequirements && (
+                          <div className="p-3 bg-green-50 rounded-lg">
+                            <div className="text-sm text-green-800">
+                              ✓ Voice requirements captured! Ready to generate your app.
+                            </div>
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  </div>
+
+                  {/* Conversation and Transcript */}
+                  <div className="space-y-6">
+                    {typeof window !== 'undefined' && (
+                      <ConversationDialog
+                        messages={conversationMessages}
+                        onSendMessage={handleConversationMessage}
+                        onVoiceResponse={speakText}
+                        isProcessing={isGenerating}
+                        voiceEnabled={voiceEnabled}
+                      />
+                    )}
+                    
+                    {voiceTranscript && (
+                      <TranscriptDisplay
+                        transcript={voiceTranscript}
+                        isLive={isListening}
+                        isFinal={!isListening && voiceTranscript.length > 0}
+                        onEdit={(edited) => {
+                          setVoiceTranscript(edited)
+                          setIdea(edited)
+                        }}
+                      />
+                    )}
+                  </div>
+                </div>
+              </TabsContent>
+            </Tabs>
           </div>
         ) : (
           /* Generated App Interface */
@@ -372,6 +795,10 @@ export default function Home() {
                     <Eye className="mr-2 h-4 w-4" />
                     {previewMode ? 'Edit Code' : 'Preview App'}
                   </Button>
+                  <Button onClick={speakAppSummary} variant="outline">
+                    <Volume2 className="mr-2 h-4 w-4" />
+                    Speak Summary
+                  </Button>
                   <Button onClick={downloadProject} variant="outline">
                     <Download className="mr-2 h-4 w-4" />
                     Download Project
@@ -384,29 +811,23 @@ export default function Home() {
               </CardContent>
             </Card>
 
-            {/* Preview Mode */}
-            {previewMode ? (
+            {/* Preview Mode - SIMPLE TEST */}
+            <div className="space-y-6">
               <Card>
-                <CardHeader>
-                  <CardTitle>App Preview</CardTitle>
-                  <CardDescription>
-                    This is how your app will look and function. You can make changes below.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="bg-gray-100 p-4 rounded-lg min-h-[400px] flex items-center justify-center">
-                    <div className="text-center">
-                      <div className="text-6xl mb-4">📱</div>
-                      <h3 className="text-xl font-semibold mb-2">App Preview</h3>
-                      <p className="text-gray-600">
-                        Interactive preview of {generatedApp.name} would appear here.
-                        Users can test the app functionality and provide feedback.
-                      </p>
-                    </div>
+                <CardContent className="p-6">
+                  <div className="text-center">
+                    <h2 className="text-2xl font-bold text-red-500">SIMPLE TEST PREVIEW</h2>
+                    <p className="text-lg">This should always show up!</p>
+                    <p className="text-sm">Preview Mode: {previewMode ? 'TRUE' : 'FALSE'}</p>
+                    <p className="text-sm">Generated App: {generatedApp ? 'YES' : 'NO'}</p>
+                    {generatedApp && (
+                      <p className="text-sm">App Name: {generatedApp.name}</p>
+                    )}
                   </div>
                 </CardContent>
               </Card>
-            ) : (
+            </div>
+            {!previewMode && generatedApp && (
               /* Code Editor Mode */
               <Card>
                 <CardHeader>
@@ -455,6 +876,182 @@ export default function Home() {
                           {generatedApp.generatedFiles.find(f => f.filename === selectedFile)?.content || ''}
                         </code>
                       </pre>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+            
+            {/* Preview Mode - Enhanced Interactive Preview */}
+            {previewMode && generatedApp && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Eye className="h-5 w-5" />
+                    Interactive App Preview
+                  </CardTitle>
+                  <CardDescription>
+                    Experience your generated app with interactive functionality
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex justify-center">
+                    <div className="relative w-80 h-[600px] bg-black rounded-[3rem] p-4 shadow-2xl">
+                      {/* Phone notch */}
+                      <div className="absolute top-4 left-1/2 transform -translate-x-1/2 w-32 h-6 bg-black rounded-b-lg z-10"></div>
+                      
+                      {/* Phone screen */}
+                      <div className="w-full h-full bg-white rounded-[2.5rem] overflow-hidden relative">
+                        {/* Status bar */}
+                        <div className="bg-gray-100 px-4 py-2 flex justify-between items-center text-xs">
+                          <span>9:41</span>
+                          <div className="flex gap-1">
+                            <div className="w-4 h-3 bg-green-500 rounded-sm"></div>
+                            <div className="w-4 h-3 bg-gray-300 rounded-sm"></div>
+                            <div className="w-4 h-3 bg-gray-300 rounded-sm"></div>
+                          </div>
+                        </div>
+                        
+                        {/* App content */}
+                        <div className="p-4 h-full overflow-y-auto">
+                          {generatedApp.name.toLowerCase().includes('todo') ? (
+                            /* Todo App Preview */
+                            <div className="space-y-4">
+                              <h2 className="text-2xl font-bold text-center mb-4">{generatedApp.name}</h2>
+                              
+                              {/* Add todo input */}
+                              <div className="flex gap-2 mb-4">
+                                <input
+                                  type="text"
+                                  placeholder="Add a new todo..."
+                                  className="flex-1 p-2 border rounded-lg text-sm"
+                                  value={newTask}
+                                  onChange={(e) => setNewTask(e.target.value)}
+                                  onKeyPress={(e) => e.key === 'Enter' && addTask()}
+                                />
+                                <button
+                                  onClick={addTask}
+                                  className="px-3 py-2 bg-blue-500 text-white rounded-lg text-sm hover:bg-blue-600"
+                                >
+                                  Add
+                                </button>
+                              </div>
+                              
+                              {/* Todo list */}
+                              <div className="space-y-2">
+                                {tasks.map((task) => (
+                                  <div
+                                    key={task.id}
+                                    className="bg-gray-50 rounded-lg p-3 flex items-center gap-3"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={task.completed}
+                                      onChange={() => toggleTask(task.id)}
+                                      className="w-4 h-4"
+                                    />
+                                    <div className="flex-1">
+                                      <span className={`text-sm ${task.completed ? 'line-through text-gray-500' : ''}`}>
+                                        {task.title}
+                                      </span>
+                                      <div className="text-xs text-gray-500 mt-1">
+                                        {task.due}
+                                      </div>
+                                    </div>
+                                    <div className={`w-2 h-2 rounded-full bg-${task.priority}-500`}></div>
+                                  </div>
+                                ))}
+                                
+                                {tasks.length === 0 && (
+                                  <div className="text-center py-8 text-gray-500 text-sm">
+                                    No todos yet. Add one above!
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          ) : generatedApp.name.toLowerCase().includes('recipe') ? (
+                            /* Recipe App Preview */
+                            <div className="space-y-4">
+                              <h2 className="text-2xl font-bold text-center mb-4">{generatedApp.name}</h2>
+                              
+                              {/* Recipe card */}
+                              <div className="bg-gradient-to-r from-orange-400 to-red-500 rounded-lg p-4 text-white mb-4">
+                                <h3 className="font-bold text-lg mb-2">Delicious Pasta</h3>
+                                <p className="text-sm opacity-90">Creamy carbonara with bacon</p>
+                                <div className="flex gap-2 mt-2">
+                                  <span className="text-xs bg-white/20 px-2 py-1 rounded">30 min</span>
+                                  <span className="text-xs bg-white/20 px-2 py-1 rounded">Easy</span>
+                                </div>
+                              </div>
+                              
+                              {/* Ingredients */}
+                              <div>
+                                <h3 className="font-semibold mb-2">Ingredients</h3>
+                                <div className="grid grid-cols-2 gap-2 text-sm">
+                                  {['Pasta', 'Bacon', 'Eggs', 'Parmesan', 'Black Pepper', 'Salt'].map((ingredient, index) => (
+                                    <div key={index} className="bg-gray-50 rounded-lg p-2 text-center">
+                                      {ingredient}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                              
+                              {/* Instructions */}
+                              <div>
+                                <h3 className="font-semibold mb-2">Instructions</h3>
+                                <div className="space-y-2 text-sm">
+                                  <div className="flex gap-2">
+                                    <span className="bg-blue-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">1</span>
+                                    <span>Cook pasta according to package directions</span>
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <span className="bg-blue-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">2</span>
+                                    <span>Fry bacon until crispy</span>
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <span className="bg-blue-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">3</span>
+                                    <span>Mix eggs and cheese</span>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          ) : (
+                            /* Generic App Preview */
+                            <div className="space-y-4">
+                              <h2 className="text-2xl font-bold text-center mb-4">{generatedApp.name}</h2>
+                              
+                              <div className="bg-gradient-to-r from-blue-500 to-purple-600 rounded-lg p-6 text-white text-center">
+                                <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-4">
+                                  <Sparkles className="w-8 h-8" />
+                                </div>
+                                <h3 className="font-bold text-lg mb-2">Welcome to Your App</h3>
+                                <p className="text-sm opacity-90">This is a preview of your generated application</p>
+                              </div>
+                              
+                              <div className="grid grid-cols-2 gap-3">
+                                {['Dashboard', 'Profile', 'Settings', 'Analytics'].map((feature, index) => (
+                                  <div key={index} className="bg-gray-50 rounded-lg p-4 text-center">
+                                    <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-2">
+                                      <div className="w-4 h-4 bg-blue-500 rounded"></div>
+                                    </div>
+                                    <span className="text-sm font-medium">{feature}</span>
+                                  </div>
+                                ))}
+                              </div>
+                              
+                              <div className="bg-blue-50 rounded-lg p-4">
+                                <h4 className="font-medium text-blue-900 mb-2">App Features</h4>
+                                <ul className="text-sm text-blue-800 space-y-1">
+                                  <li>• Cross-platform compatibility</li>
+                                  <li>• Modern, responsive design</li>
+                                  <li>• Interactive user interface</li>
+                                  <li>• Cloud-ready architecture</li>
+                                </ul>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </CardContent>
